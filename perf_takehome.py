@@ -212,6 +212,21 @@ class KernelBuilder:
         v_zero = self.scratch_vconst(0)
         v_forest_values_p = self.alloc_scratch("v_forest_values_p", VLEN)
         self.add("valu", ("vbroadcast", v_forest_values_p, self.scratch["forest_values_p"]))
+        root_val = self.alloc_scratch("root_val")
+        v_root = self.alloc_scratch("v_root", VLEN)
+        node1_val = self.alloc_scratch("node1_val")
+        node2_val = self.alloc_scratch("node2_val")
+        v_node1 = self.alloc_scratch("v_node1", VLEN)
+        v_node2 = self.alloc_scratch("v_node2", VLEN)
+        self.add("flow", ("add_imm", tmp1, self.scratch["forest_values_p"], 0))
+        self.add("load", ("load", root_val, tmp1))
+        self.add("valu", ("vbroadcast", v_root, root_val))
+        self.add("flow", ("add_imm", tmp1, self.scratch["forest_values_p"], 1))
+        self.add("load", ("load", node1_val, tmp1))
+        self.add("valu", ("vbroadcast", v_node1, node1_val))
+        self.add("flow", ("add_imm", tmp1, self.scratch["forest_values_p"], 2))
+        self.add("load", ("load", node2_val, tmp1))
+        self.add("valu", ("vbroadcast", v_node2, node2_val))
 
         # Load all values into scratch. Input indices are always initialized to zero,
         # so we can initialize scratch indices directly without memory loads.
@@ -245,24 +260,38 @@ class KernelBuilder:
             for chunk in range(0, batch_size, chunk_elems):
                 active = min(UNROLL, (batch_size - chunk) // VLEN)
 
-                # Strip 1: Address calculation
-                for j in range(active):
-                    vid = scratch_indices + chunk + j * VLEN
-                    vaddr = v_addr_arr[j]
-                    body.append(("valu", ("+", vaddr, v_forest_values_p, vid)))
-
-                # Strip 2: Gathers (The main bottleneck)
-                for vi in range(VLEN):
+                if round % 11 == 0:
                     for j in range(active):
+                        vval = scratch_values + chunk + j * VLEN
+                        body.append(("valu", ("^", vval, vval, v_root)))
+                elif round % 11 == 1:
+                    for j in range(active):
+                        vid = scratch_indices + chunk + j * VLEN
                         vnode = v_node_val_arr[j]
+                        vmask = v_tmp1_arr[j]
+                        vval = scratch_values + chunk + j * VLEN
+                        body.append(("valu", ("==", vmask, vid, v_one)))
+                        body.append(("flow", ("vselect", vnode, vmask, v_node1, v_node2)))
+                        body.append(("valu", ("^", vval, vval, vnode)))
+                else:
+                    # Strip 1: Address calculation
+                    for j in range(active):
+                        vid = scratch_indices + chunk + j * VLEN
                         vaddr = v_addr_arr[j]
-                        body.append(("load", ("load_offset", vnode, vaddr, vi)))
+                        body.append(("valu", ("+", vaddr, v_forest_values_p, vid)))
 
-                # Strip 3: Hash and Update
-                for j in range(active):
-                    vval = scratch_values + chunk + j * VLEN
-                    vnode = v_node_val_arr[j]
-                    body.append(("valu", ("^", vval, vval, vnode)))
+                    # Strip 2: Gathers (The main bottleneck)
+                    for vi in range(VLEN):
+                        for j in range(active):
+                            vnode = v_node_val_arr[j]
+                            vaddr = v_addr_arr[j]
+                            body.append(("load", ("load_offset", vnode, vaddr, vi)))
+
+                    # Strip 3: Hash input xor
+                    for j in range(active):
+                        vval = scratch_values + chunk + j * VLEN
+                        vnode = v_node_val_arr[j]
+                        body.append(("valu", ("^", vval, vval, vnode)))
 
                 # Hash scheduled stage-major across vectors for better slot packing.
                 for op1, val1, op2, op3, val3 in HASH_STAGES:
@@ -296,15 +325,16 @@ class KernelBuilder:
                         vtmp1 = v_tmp1_arr[j]
                         body.append(("valu", ("multiply_add", vid, vid, v_two, vtmp1)))
 
-                    # Wrap around
-                    for j in range(active):
-                        vid = scratch_indices + chunk + j * VLEN
-                        vtmp1 = v_tmp1_arr[j]
-                        body.append(("valu", ("<", vtmp1, vid, v_n_nodes)))
-                    for j in range(active):
-                        vid = scratch_indices + chunk + j * VLEN
-                        vtmp1 = v_tmp1_arr[j]
-                        body.append(("flow", ("vselect", vid, vtmp1, vid, v_zero)))
+                    # Wrap only on rounds that can overflow tree indices (depth 10 -> 11).
+                    if round % 11 == 10:
+                        for j in range(active):
+                            vid = scratch_indices + chunk + j * VLEN
+                            vtmp1 = v_tmp1_arr[j]
+                            body.append(("valu", ("<", vtmp1, vid, v_n_nodes)))
+                        for j in range(active):
+                            vid = scratch_indices + chunk + j * VLEN
+                            vtmp1 = v_tmp1_arr[j]
+                            body.append(("flow", ("vselect", vid, vtmp1, vid, v_zero)))
 
             self.instrs.extend(self.build(body, vliw=True))
                 
