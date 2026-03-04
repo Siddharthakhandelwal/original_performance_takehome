@@ -196,8 +196,9 @@ class KernelBuilder:
         forest_values_p = 7
         inp_values_p = forest_values_p + n_nodes + batch_size
 
-        c_one = self.scratch_const(1)
         c_forest_values_p = self.scratch_const(forest_values_p)
+        c_forest_values_p1 = self.scratch_const(forest_values_p + 1)
+        c_forest_values_p2 = self.scratch_const(forest_values_p + 2)
         c_inp_values_p = self.scratch_const(inp_values_p)
 
         # Vectorization constants pre-allocated
@@ -223,11 +224,9 @@ class KernelBuilder:
             ("alu", ("+", tmp1, c_forest_values_p, v_zero)),
             ("load", ("load", root_val, tmp1)),
             ("valu", ("vbroadcast", v_root, root_val)),
-            ("alu", ("+", tmp1, tmp1, c_one)),
-            ("load", ("load", node1_val, tmp1)),
+            ("load", ("load", node1_val, c_forest_values_p1)),
             ("valu", ("vbroadcast", v_node1, node1_val)),
-            ("alu", ("+", tmp1, tmp1, c_one)),
-            ("load", ("load", node2_val, tmp1)),
+            ("load", ("load", node2_val, c_forest_values_p2)),
             ("valu", ("vbroadcast", v_node2, node2_val)),
             ("valu", ("-", v_node12_diff, v_node1, v_node2)),
         ]
