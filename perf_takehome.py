@@ -227,6 +227,8 @@ class KernelBuilder:
         self.add("flow", ("add_imm", tmp1, self.scratch["forest_values_p"], 2))
         self.add("load", ("load", node2_val, tmp1))
         self.add("valu", ("vbroadcast", v_node2, node2_val))
+        v_node12_diff = self.alloc_scratch("v_node12_diff", VLEN)
+        self.add("valu", ("-", v_node12_diff, v_node1, v_node2))
 
         # Load all values into scratch. Input indices are always initialized to zero,
         # so we can initialize scratch indices directly without memory loads.
@@ -271,7 +273,7 @@ class KernelBuilder:
                         vmask = v_tmp1_arr[j]
                         vval = scratch_values + chunk + j * VLEN
                         body.append(("valu", ("==", vmask, vid, v_one)))
-                        body.append(("flow", ("vselect", vnode, vmask, v_node1, v_node2)))
+                        body.append(("valu", ("multiply_add", vnode, vmask, v_node12_diff, v_node2)))
                         body.append(("valu", ("^", vval, vval, vnode)))
                 else:
                     # Strip 1: Address calculation
@@ -318,18 +320,28 @@ class KernelBuilder:
                             vid = scratch_indices + chunk + j * VLEN
                             body.append(("valu", ("^", vid, v_zero, v_zero)))
                     else:
-                        # Update logic: idx = (idx << 1) + (1 if val % 2 == 0 else 2)
-                        for j in range(active):
-                            vval = scratch_values + chunk + j * VLEN
-                            vtmp1 = v_tmp1_arr[j]
-                            body.append(("valu", ("&", vtmp1, vval, v_one)))
-                        for j in range(active):
-                            vtmp1 = v_tmp1_arr[j]
-                            body.append(("valu", ("+", vtmp1, vtmp1, v_one)))
-                        for j in range(active):
-                            vid = scratch_indices + chunk + j * VLEN
-                            vtmp1 = v_tmp1_arr[j]
-                            body.append(("valu", ("multiply_add", vid, vid, v_two, vtmp1)))
+                        if round % 11 == 0:
+                            # Starting from zero indices: idx = (val & 1) + 1
+                            for j in range(active):
+                                vid = scratch_indices + chunk + j * VLEN
+                                vval = scratch_values + chunk + j * VLEN
+                                body.append(("valu", ("&", vid, vval, v_one)))
+                            for j in range(active):
+                                vid = scratch_indices + chunk + j * VLEN
+                                body.append(("valu", ("+", vid, vid, v_one)))
+                        else:
+                            # Update logic: idx = (idx << 1) + (1 if val % 2 == 0 else 2)
+                            for j in range(active):
+                                vval = scratch_values + chunk + j * VLEN
+                                vtmp1 = v_tmp1_arr[j]
+                                body.append(("valu", ("&", vtmp1, vval, v_one)))
+                            for j in range(active):
+                                vtmp1 = v_tmp1_arr[j]
+                                body.append(("valu", ("+", vtmp1, vtmp1, v_one)))
+                            for j in range(active):
+                                vid = scratch_indices + chunk + j * VLEN
+                                vtmp1 = v_tmp1_arr[j]
+                                body.append(("valu", ("multiply_add", vid, vid, v_two, vtmp1)))
 
             self.instrs.extend(self.build(body, vliw=True))
                 
