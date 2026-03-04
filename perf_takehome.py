@@ -223,17 +223,20 @@ class KernelBuilder:
         node2_val = self.alloc_scratch("node2_val")
         v_node1 = self.alloc_scratch("v_node1", VLEN)
         v_node2 = self.alloc_scratch("v_node2", VLEN)
-        self.add("flow", ("add_imm", tmp1, self.scratch["forest_values_p"], 0))
-        self.add("load", ("load", root_val, tmp1))
-        self.add("valu", ("vbroadcast", v_root, root_val))
-        self.add("alu", ("+", tmp1, tmp1, c_one))
-        self.add("load", ("load", node1_val, tmp1))
-        self.add("valu", ("vbroadcast", v_node1, node1_val))
-        self.add("alu", ("+", tmp1, tmp1, c_one))
-        self.add("load", ("load", node2_val, tmp1))
-        self.add("valu", ("vbroadcast", v_node2, node2_val))
         v_node12_diff = self.alloc_scratch("v_node12_diff", VLEN)
-        self.add("valu", ("-", v_node12_diff, v_node1, v_node2))
+        preload_slots = [
+            ("flow", ("add_imm", tmp1, self.scratch["forest_values_p"], 0)),
+            ("load", ("load", root_val, tmp1)),
+            ("valu", ("vbroadcast", v_root, root_val)),
+            ("alu", ("+", tmp1, tmp1, c_one)),
+            ("load", ("load", node1_val, tmp1)),
+            ("valu", ("vbroadcast", v_node1, node1_val)),
+            ("alu", ("+", tmp1, tmp1, c_one)),
+            ("load", ("load", node2_val, tmp1)),
+            ("valu", ("vbroadcast", v_node2, node2_val)),
+            ("valu", ("-", v_node12_diff, v_node1, v_node2)),
+        ]
+        self.instrs.extend(self.build(preload_slots, vliw=True))
 
         # Load all values into scratch. Input indices are always initialized to zero,
         # so we can initialize scratch indices directly without memory loads.
