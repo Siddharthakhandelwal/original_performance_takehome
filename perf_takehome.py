@@ -207,7 +207,13 @@ class KernelBuilder:
             for v in [val1, val3]:
                 if v not in vconsts:
                     vconsts[v] = self.scratch_vconst(v)
-        
+
+        fused_mul_consts = {
+            12: self.scratch_vconst(1 + (1 << 12)),
+            5: self.scratch_vconst(1 + (1 << 5)),
+            3: self.scratch_vconst(1 + (1 << 3)),
+        }
+
         v_one = self.scratch_vconst(1)
         v_two = self.scratch_vconst(2)
         v_forest_values_p = self.alloc_scratch("v_forest_values_p", VLEN)
@@ -300,6 +306,14 @@ class KernelBuilder:
                 # Hash scheduled stage-major across vectors for better slot packing.
                 for op1, val1, op2, op3, val3 in HASH_STAGES:
                     v1 = vconsts[val1]
+                    # Fuse stages of form: val = (val + const) + (val << k)
+                    if op1 == "+" and op2 == "+" and op3 == "<<" and val3 in fused_mul_consts:
+                        vmul = fused_mul_consts[val3]
+                        for j in range(active):
+                            vval = scratch_values + chunk + j * VLEN
+                            body.append(("valu", ("multiply_add", vval, vval, vmul, v1)))
+                        continue
+
                     v3 = vconsts[val3]
                     for j in range(active):
                         vval = scratch_values + chunk + j * VLEN
