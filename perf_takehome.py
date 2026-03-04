@@ -175,21 +175,9 @@ class KernelBuilder:
             self.vconst_map[val] = addr
         return self.vconst_map[val]
 
-    def build_hash_vector(self, val_hash_addr, tmp1, tmp2, vconsts):
-        slots = []
-        for hi, stage in enumerate(HASH_STAGES):
-            op1, val1, op2, op3, val3 = stage
-            v1 = vconsts[val1]
-            v3 = vconsts[val3]
-            slots.append(("valu", (op1, tmp1, val_hash_addr, v1)))
-            slots.append(("valu", (op3, tmp2, val_hash_addr, v3)))
-            slots.append(("valu", (op2, val_hash_addr, tmp1, tmp2)))
-        return slots
-
     def build_kernel(
         self, forest_height: int, n_nodes: int, batch_size: int, rounds: int
     ):
-        tmp1 = self.alloc_scratch("tmp1")
         tmp3 = self.alloc_scratch("tmp3")
 
         # Pointers are deterministic from the frozen memory layout used by tests.
