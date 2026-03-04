@@ -190,7 +190,6 @@ class KernelBuilder:
         self, forest_height: int, n_nodes: int, batch_size: int, rounds: int
     ):
         tmp1 = self.alloc_scratch("tmp1")
-        tmp2 = self.alloc_scratch("tmp2")
         tmp3 = self.alloc_scratch("tmp3")
 
         # Only load header fields actually used by this kernel implementation.
@@ -213,7 +212,6 @@ class KernelBuilder:
         
         v_one = self.scratch_vconst(1)
         v_two = self.scratch_vconst(2)
-        v_n_nodes = self.scratch_vconst(n_nodes)
         v_zero = self.scratch_vconst(0)
         v_forest_values_p = self.alloc_scratch("v_forest_values_p", VLEN)
         self.add("valu", ("vbroadcast", v_forest_values_p, self.scratch["forest_values_p"]))
