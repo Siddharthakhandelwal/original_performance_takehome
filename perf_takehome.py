@@ -210,7 +210,6 @@ class KernelBuilder:
         
         v_one = self.scratch_vconst(1)
         v_two = self.scratch_vconst(2)
-        v_zero = self.scratch_vconst(0)
         v_forest_values_p = self.alloc_scratch("v_forest_values_p", VLEN)
         self.add("valu", ("vbroadcast", v_forest_values_p, c_forest_values_p))
         root_val = self.alloc_scratch("root_val")
@@ -221,8 +220,7 @@ class KernelBuilder:
         v_node2 = self.alloc_scratch("v_node2", VLEN)
         v_node12_diff = self.alloc_scratch("v_node12_diff", VLEN)
         preload_slots = [
-            ("alu", ("+", tmp1, c_forest_values_p, v_zero)),
-            ("load", ("load", root_val, tmp1)),
+            ("load", ("load", root_val, c_forest_values_p)),
             ("valu", ("vbroadcast", v_root, root_val)),
             ("load", ("load", node1_val, c_forest_values_p1)),
             ("valu", ("vbroadcast", v_node1, node1_val)),
@@ -322,7 +320,7 @@ class KernelBuilder:
                         # At depth 10, next index always overflows tree bounds and wraps to zero.
                         for j in range(active):
                             vid = scratch_indices + chunk + j * VLEN
-                            body.append(("valu", ("^", vid, v_zero, v_zero)))
+                            body.append(("valu", ("^", vid, vid, vid)))
                     else:
                         if round % 11 == 0:
                             # Starting from zero indices: idx = (val & 1) + 1
