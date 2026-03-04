@@ -246,21 +246,22 @@ class KernelBuilder:
         # Vectorization Scratch
         # Each lane-group needs 4 vectors (node value, address, and two temporaries).
         # Keep unroll modest so we always fit scratch across all benchmark inputs.
-        UNROLL = min(batch_size // VLEN, 4)
-        
-        v_node_val_arr = [self.alloc_scratch(f"v_node_val_{j}", VLEN) for j in range(UNROLL)]
-        v_addr_arr = [self.alloc_scratch(f"v_addr_{j}", VLEN) for j in range(UNROLL)]
-        # We'll use these for hashing and update logic
-        v_tmp1_arr = [self.alloc_scratch(f"v_tmp1_{j}", VLEN) for j in range(UNROLL)]
-        v_tmp2_arr = [self.alloc_scratch(f"v_tmp2_{j}", VLEN) for j in range(UNROLL)]
+        BASE_UNROLL = min(batch_size // VLEN, 4)
+        FAST_UNROLL = min(batch_size // VLEN, 8)
 
-        chunk_elems = UNROLL * VLEN
+        v_node_val_arr = [self.alloc_scratch(f"v_node_val_{j}", VLEN) for j in range(FAST_UNROLL)]
+        v_addr_arr = [self.alloc_scratch(f"v_addr_{j}", VLEN) for j in range(FAST_UNROLL)]
+        # We'll use these for hashing and update logic
+        v_tmp1_arr = [self.alloc_scratch(f"v_tmp1_{j}", VLEN) for j in range(FAST_UNROLL)]
+        v_tmp2_arr = [self.alloc_scratch(f"v_tmp2_{j}", VLEN) for j in range(FAST_UNROLL)]
 
         # Main Loop over Rounds
         for round in range(rounds):
             body = []
+            curr_unroll = FAST_UNROLL if (round % 11) in (0, 1) else BASE_UNROLL
+            chunk_elems = curr_unroll * VLEN
             for chunk in range(0, batch_size, chunk_elems):
-                active = min(UNROLL, (batch_size - chunk) // VLEN)
+                active = min(curr_unroll, (batch_size - chunk) // VLEN)
 
                 if round % 11 == 0:
                     for j in range(active):
