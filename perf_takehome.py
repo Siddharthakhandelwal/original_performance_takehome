@@ -204,15 +204,29 @@ class KernelBuilder:
 
         v_one = self.scratch_vconst(1)
         v_two = self.scratch_vconst(2)
+        v_three = self.scratch_vconst(3)
+        v_four = self.scratch_vconst(4)
+        v_five = self.scratch_vconst(5)
         v_forest_values_p = self.alloc_scratch("v_forest_values_p", VLEN)
         self.add("valu", ("vbroadcast", v_forest_values_p, c_forest_values_p))
         root_val = self.alloc_scratch("root_val")
         v_root = self.alloc_scratch("v_root", VLEN)
         node1_val = self.alloc_scratch("node1_val")
         node2_val = self.alloc_scratch("node2_val")
+        node3_val = self.alloc_scratch("node3_val")
+        node4_val = self.alloc_scratch("node4_val")
+        node5_val = self.alloc_scratch("node5_val")
+        node6_val = self.alloc_scratch("node6_val")
         v_node1 = self.alloc_scratch("v_node1", VLEN)
         v_node2 = self.alloc_scratch("v_node2", VLEN)
+        v_node3 = self.alloc_scratch("v_node3", VLEN)
+        v_node4 = self.alloc_scratch("v_node4", VLEN)
+        v_node5 = self.alloc_scratch("v_node5", VLEN)
+        v_node6 = self.alloc_scratch("v_node6", VLEN)
         v_node12_diff = self.alloc_scratch("v_node12_diff", VLEN)
+        v_node36_diff = self.alloc_scratch("v_node36_diff", VLEN)
+        v_node46_diff = self.alloc_scratch("v_node46_diff", VLEN)
+        v_node56_diff = self.alloc_scratch("v_node56_diff", VLEN)
         preload_slots = [
             ("load", ("load", root_val, c_forest_values_p)),
             ("valu", ("vbroadcast", v_root, root_val)),
@@ -220,7 +234,22 @@ class KernelBuilder:
             ("valu", ("vbroadcast", v_node1, node1_val)),
             ("load", ("load", node2_val, c_forest_values_p2)),
             ("valu", ("vbroadcast", v_node2, node2_val)),
+            ("load", ("const", tmp3, forest_values_p + 3)),
+            ("load", ("load", node3_val, tmp3)),
+            ("valu", ("vbroadcast", v_node3, node3_val)),
+            ("load", ("const", tmp3, forest_values_p + 4)),
+            ("load", ("load", node4_val, tmp3)),
+            ("valu", ("vbroadcast", v_node4, node4_val)),
+            ("load", ("const", tmp3, forest_values_p + 5)),
+            ("load", ("load", node5_val, tmp3)),
+            ("valu", ("vbroadcast", v_node5, node5_val)),
+            ("load", ("const", tmp3, forest_values_p + 6)),
+            ("load", ("load", node6_val, tmp3)),
+            ("valu", ("vbroadcast", v_node6, node6_val)),
             ("valu", ("-", v_node12_diff, v_node1, v_node2)),
+            ("valu", ("-", v_node36_diff, v_node3, v_node6)),
+            ("valu", ("-", v_node46_diff, v_node4, v_node6)),
+            ("valu", ("-", v_node56_diff, v_node5, v_node6)),
         ]
         # Load all values into scratch. Input indices are always initialized to zero,
         # so we can initialize scratch indices directly without memory loads.
@@ -253,7 +282,7 @@ class KernelBuilder:
         # Main Loop over Rounds
         for round in range(rounds):
             body = []
-            curr_unroll = FAST_UNROLL if (round % 11) in (0, 1) else BASE_UNROLL
+            curr_unroll = FAST_UNROLL if (round % 11) in (0, 1, 2) else BASE_UNROLL
             chunk_elems = curr_unroll * VLEN
             for chunk in range(0, batch_size, chunk_elems):
                 active = min(curr_unroll, (batch_size - chunk) // VLEN)
@@ -270,6 +299,19 @@ class KernelBuilder:
                         vval = scratch_values + chunk + j * VLEN
                         body.append(("valu", ("==", vmask, vid, v_one)))
                         body.append(("valu", ("multiply_add", vnode, vmask, v_node12_diff, v_node2)))
+                        body.append(("valu", ("^", vval, vval, vnode)))
+                elif round % 11 == 2:
+                    for j in range(active):
+                        vid = scratch_indices + chunk + j * VLEN
+                        vmask = v_tmp1_arr[j]
+                        vnode = v_node_val_arr[j]
+                        vval = scratch_values + chunk + j * VLEN
+                        body.append(("valu", ("==", vmask, vid, v_three)))
+                        body.append(("valu", ("multiply_add", vnode, vmask, v_node36_diff, v_node6)))
+                        body.append(("valu", ("==", vmask, vid, v_four)))
+                        body.append(("valu", ("multiply_add", vnode, vmask, v_node46_diff, vnode)))
+                        body.append(("valu", ("==", vmask, vid, v_five)))
+                        body.append(("valu", ("multiply_add", vnode, vmask, v_node56_diff, vnode)))
                         body.append(("valu", ("^", vval, vval, vnode)))
                 else:
                     # Strip 1: Address calculation
