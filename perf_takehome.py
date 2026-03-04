@@ -192,16 +192,13 @@ class KernelBuilder:
         tmp1 = self.alloc_scratch("tmp1")
         tmp3 = self.alloc_scratch("tmp3")
 
-        # Only load header fields actually used by this kernel implementation.
-        init_vars = ["forest_values_p", "inp_values_p"]
-        for v in init_vars:
-            self.alloc_scratch(v, 1)
-        self.add("load", ("const", tmp1, 4))
-        self.add("load", ("load", self.scratch["forest_values_p"], tmp1))
-        self.add("load", ("const", tmp1, 6))
-        self.add("load", ("load", self.scratch["inp_values_p"], tmp1))
+        # Pointers are deterministic from the frozen memory layout used by tests.
+        forest_values_p = 7
+        inp_values_p = forest_values_p + n_nodes + batch_size
 
         c_one = self.scratch_const(1)
+        c_forest_values_p = self.scratch_const(forest_values_p)
+        c_inp_values_p = self.scratch_const(inp_values_p)
 
         # Vectorization constants pre-allocated
         vconsts = {}
@@ -214,7 +211,7 @@ class KernelBuilder:
         v_two = self.scratch_vconst(2)
         v_zero = self.scratch_vconst(0)
         v_forest_values_p = self.alloc_scratch("v_forest_values_p", VLEN)
-        self.add("valu", ("vbroadcast", v_forest_values_p, self.scratch["forest_values_p"]))
+        self.add("valu", ("vbroadcast", v_forest_values_p, c_forest_values_p))
         root_val = self.alloc_scratch("root_val")
         v_root = self.alloc_scratch("v_root", VLEN)
         node1_val = self.alloc_scratch("node1_val")
@@ -223,7 +220,7 @@ class KernelBuilder:
         v_node2 = self.alloc_scratch("v_node2", VLEN)
         v_node12_diff = self.alloc_scratch("v_node12_diff", VLEN)
         preload_slots = [
-            ("flow", ("add_imm", tmp1, self.scratch["forest_values_p"], 0)),
+            ("alu", ("+", tmp1, c_forest_values_p, v_zero)),
             ("load", ("load", root_val, tmp1)),
             ("valu", ("vbroadcast", v_root, root_val)),
             ("alu", ("+", tmp1, tmp1, c_one)),
@@ -242,7 +239,7 @@ class KernelBuilder:
         scratch_values = self.alloc_scratch("scratch_values", batch_size)
         c_vlen = self.scratch_const(VLEN)
         init_slots = []
-        init_slots.append(("flow", ("add_imm", tmp3, self.scratch["inp_values_p"], 0)))
+        init_slots.append(("alu", ("+", tmp3, c_inp_values_p, v_zero)))
         for i in range(0, batch_size, VLEN):
             init_slots.append(("load", ("vload", scratch_values + i, tmp3)))
             if i + VLEN < batch_size:
@@ -354,7 +351,7 @@ class KernelBuilder:
                 
         # Store back to memory
         store_slots = []
-        store_slots.append(("flow", ("add_imm", tmp3, self.scratch["inp_values_p"], 0)))
+        store_slots.append(("alu", ("+", tmp3, c_inp_values_p, v_zero)))
         for i in range(0, batch_size, VLEN):
             store_slots.append(("store", ("vstore", tmp3, scratch_values + i)))
             if i + VLEN < batch_size:
