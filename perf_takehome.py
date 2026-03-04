@@ -193,11 +193,16 @@ class KernelBuilder:
         tmp2 = self.alloc_scratch("tmp2")
         tmp3 = self.alloc_scratch("tmp3")
 
-        init_vars = ["rounds", "n_nodes", "batch_size", "forest_height", "forest_values_p", "inp_indices_p", "inp_values_p"]
-        for v in init_vars: self.alloc_scratch(v, 1)
-        for i, v in enumerate(init_vars):
-            self.add("load", ("const", tmp1, i))
-            self.add("load", ("load", self.scratch[v], tmp1))
+        # Only load header fields actually used by this kernel implementation.
+        init_vars = ["forest_values_p", "inp_values_p"]
+        for v in init_vars:
+            self.alloc_scratch(v, 1)
+        self.add("load", ("const", tmp1, 4))
+        self.add("load", ("load", self.scratch["forest_values_p"], tmp1))
+        self.add("load", ("const", tmp1, 6))
+        self.add("load", ("load", self.scratch["inp_values_p"], tmp1))
+
+        c_one = self.scratch_const(1)
 
         # Vectorization constants pre-allocated
         vconsts = {}
@@ -221,10 +226,10 @@ class KernelBuilder:
         self.add("flow", ("add_imm", tmp1, self.scratch["forest_values_p"], 0))
         self.add("load", ("load", root_val, tmp1))
         self.add("valu", ("vbroadcast", v_root, root_val))
-        self.add("flow", ("add_imm", tmp1, self.scratch["forest_values_p"], 1))
+        self.add("alu", ("+", tmp1, tmp1, c_one))
         self.add("load", ("load", node1_val, tmp1))
         self.add("valu", ("vbroadcast", v_node1, node1_val))
-        self.add("flow", ("add_imm", tmp1, self.scratch["forest_values_p"], 2))
+        self.add("alu", ("+", tmp1, tmp1, c_one))
         self.add("load", ("load", node2_val, tmp1))
         self.add("valu", ("vbroadcast", v_node2, node2_val))
         v_node12_diff = self.alloc_scratch("v_node12_diff", VLEN)
