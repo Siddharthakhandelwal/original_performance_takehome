@@ -230,8 +230,6 @@ class KernelBuilder:
             ("valu", ("vbroadcast", v_node2, node2_val)),
             ("valu", ("-", v_node12_diff, v_node1, v_node2)),
         ]
-        self.instrs.extend(self.build(preload_slots, vliw=True))
-
         # Load all values into scratch. Input indices are always initialized to zero,
         # so we can initialize scratch indices directly without memory loads.
         scratch_indices = self.alloc_scratch("scratch_indices", batch_size)
@@ -243,7 +241,8 @@ class KernelBuilder:
             init_slots.append(("load", ("vload", scratch_values + i, tmp3)))
             if i + VLEN < batch_size:
                 init_slots.append(("alu", ("+", tmp3, tmp3, c_vlen)))
-        self.instrs.extend(self.build(init_slots, vliw=True))
+        prologue_slots = preload_slots + init_slots
+        self.instrs.extend(self.build(prologue_slots, vliw=True))
 
         # Vectorization Scratch
         # Each lane-group needs 4 vectors (node value, address, and two temporaries).
