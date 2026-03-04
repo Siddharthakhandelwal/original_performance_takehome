@@ -236,11 +236,13 @@ class KernelBuilder:
         scratch_values = self.alloc_scratch("scratch_values", batch_size)
         c_vlen = self.scratch_const(VLEN)
         init_slots = []
-        init_slots.append(("alu", ("+", tmp3, c_inp_values_p, v_zero)))
-        for i in range(0, batch_size, VLEN):
-            init_slots.append(("load", ("vload", scratch_values + i, tmp3)))
-            if i + VLEN < batch_size:
-                init_slots.append(("alu", ("+", tmp3, tmp3, c_vlen)))
+        init_slots.append(("load", ("vload", scratch_values, c_inp_values_p)))
+        if batch_size > VLEN:
+            init_slots.append(("alu", ("+", tmp3, c_inp_values_p, c_vlen)))
+            for i in range(VLEN, batch_size, VLEN):
+                init_slots.append(("load", ("vload", scratch_values + i, tmp3)))
+                if i + VLEN < batch_size:
+                    init_slots.append(("alu", ("+", tmp3, tmp3, c_vlen)))
         prologue_slots = preload_slots + init_slots
         self.instrs.extend(self.build(prologue_slots, vliw=True))
 
@@ -349,11 +351,13 @@ class KernelBuilder:
                 
         # Store back to memory
         store_slots = []
-        store_slots.append(("alu", ("+", tmp3, c_inp_values_p, v_zero)))
-        for i in range(0, batch_size, VLEN):
-            store_slots.append(("store", ("vstore", tmp3, scratch_values + i)))
-            if i + VLEN < batch_size:
-                store_slots.append(("alu", ("+", tmp3, tmp3, c_vlen)))
+        store_slots.append(("store", ("vstore", c_inp_values_p, scratch_values)))
+        if batch_size > VLEN:
+            store_slots.append(("alu", ("+", tmp3, c_inp_values_p, c_vlen)))
+            for i in range(VLEN, batch_size, VLEN):
+                store_slots.append(("store", ("vstore", tmp3, scratch_values + i)))
+                if i + VLEN < batch_size:
+                    store_slots.append(("alu", ("+", tmp3, tmp3, c_vlen)))
         self.instrs.extend(self.build(store_slots, vliw=True))
 
 BASELINE = 147734
