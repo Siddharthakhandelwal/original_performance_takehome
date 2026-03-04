@@ -312,29 +312,24 @@ class KernelBuilder:
                         body.append(("valu", (op2, vval, vtmp1, vtmp2)))
 
                 if round + 1 < rounds:
-                    # Update logic: idx = (idx << 1) + (1 if val % 2 == 0 else 2)
-                    for j in range(active):
-                        vval = scratch_values + chunk + j * VLEN
-                        vtmp1 = v_tmp1_arr[j]
-                        body.append(("valu", ("&", vtmp1, vval, v_one)))
-                    for j in range(active):
-                        vtmp1 = v_tmp1_arr[j]
-                        body.append(("valu", ("+", vtmp1, vtmp1, v_one)))
-                    for j in range(active):
-                        vid = scratch_indices + chunk + j * VLEN
-                        vtmp1 = v_tmp1_arr[j]
-                        body.append(("valu", ("multiply_add", vid, vid, v_two, vtmp1)))
-
-                    # Wrap only on rounds that can overflow tree indices (depth 10 -> 11).
                     if round % 11 == 10:
+                        # At depth 10, next index always overflows tree bounds and wraps to zero.
+                        for j in range(active):
+                            vid = scratch_indices + chunk + j * VLEN
+                            body.append(("valu", ("^", vid, v_zero, v_zero)))
+                    else:
+                        # Update logic: idx = (idx << 1) + (1 if val % 2 == 0 else 2)
+                        for j in range(active):
+                            vval = scratch_values + chunk + j * VLEN
+                            vtmp1 = v_tmp1_arr[j]
+                            body.append(("valu", ("&", vtmp1, vval, v_one)))
+                        for j in range(active):
+                            vtmp1 = v_tmp1_arr[j]
+                            body.append(("valu", ("+", vtmp1, vtmp1, v_one)))
                         for j in range(active):
                             vid = scratch_indices + chunk + j * VLEN
                             vtmp1 = v_tmp1_arr[j]
-                            body.append(("valu", ("<", vtmp1, vid, v_n_nodes)))
-                        for j in range(active):
-                            vid = scratch_indices + chunk + j * VLEN
-                            vtmp1 = v_tmp1_arr[j]
-                            body.append(("flow", ("vselect", vid, vtmp1, vid, v_zero)))
+                            body.append(("valu", ("multiply_add", vid, vid, v_two, vtmp1)))
 
             self.instrs.extend(self.build(body, vliw=True))
                 
