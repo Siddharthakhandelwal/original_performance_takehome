@@ -279,6 +279,8 @@ class KernelBuilder:
         v_tmp1_arr = [self.alloc_scratch(f"v_tmp1_{j}", VLEN) for j in range(FAST_UNROLL)]
         v_tmp2_arr = [self.alloc_scratch(f"v_tmp2_{j}", VLEN) for j in range(FAST_UNROLL)]
 
+        chunk_elems = UNROLL * VLEN
+
         # Main Loop over Rounds
         for round in range(rounds):
             body = []
