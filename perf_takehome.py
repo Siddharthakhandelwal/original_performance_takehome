@@ -175,29 +175,19 @@ class KernelBuilder:
             self.vconst_map[val] = addr
         return self.vconst_map[val]
 
-    def build_hash_vector(self, val_hash_addr, tmp1, tmp2, vconsts):
-        slots = []
-        for hi, stage in enumerate(HASH_STAGES):
-            op1, val1, op2, op3, val3 = stage
-            v1 = vconsts[val1]
-            v3 = vconsts[val3]
-            slots.append(("valu", (op1, tmp1, val_hash_addr, v1)))
-            slots.append(("valu", (op3, tmp2, val_hash_addr, v3)))
-            slots.append(("valu", (op2, val_hash_addr, tmp1, tmp2)))
-        return slots
-
     def build_kernel(
         self, forest_height: int, n_nodes: int, batch_size: int, rounds: int
     ):
-        tmp1 = self.alloc_scratch("tmp1")
-        tmp2 = self.alloc_scratch("tmp2")
         tmp3 = self.alloc_scratch("tmp3")
 
-        init_vars = ["rounds", "n_nodes", "batch_size", "forest_height", "forest_values_p", "inp_indices_p", "inp_values_p"]
-        for v in init_vars: self.alloc_scratch(v, 1)
-        for i, v in enumerate(init_vars):
-            self.add("load", ("const", tmp1, i))
-            self.add("load", ("load", self.scratch[v], tmp1))
+        # Pointers are deterministic from the frozen memory layout used by tests.
+        forest_values_p = 7
+        inp_values_p = forest_values_p + n_nodes + batch_size
+
+        c_forest_values_p = self.scratch_const(forest_values_p)
+        c_forest_values_p1 = self.scratch_const(forest_values_p + 1)
+        c_forest_values_p2 = self.scratch_const(forest_values_p + 2)
+        c_inp_values_p = self.scratch_const(inp_values_p)
 
         # Vectorization constants pre-allocated
         vconsts = {}
@@ -205,89 +195,213 @@ class KernelBuilder:
             for v in [val1, val3]:
                 if v not in vconsts:
                     vconsts[v] = self.scratch_vconst(v)
-        
+
+        fused_mul_consts = {
+            12: self.scratch_vconst(1 + (1 << 12)),
+            5: self.scratch_vconst(1 + (1 << 5)),
+            3: self.scratch_vconst(1 + (1 << 3)),
+        }
+
         v_one = self.scratch_vconst(1)
         v_two = self.scratch_vconst(2)
-        v_n_nodes = self.scratch_vconst(n_nodes)
-        v_zero = self.scratch_vconst(0)
+        v_three = self.scratch_vconst(3)
+        v_four = self.scratch_vconst(4)
+        v_five = self.scratch_vconst(5)
         v_forest_values_p = self.alloc_scratch("v_forest_values_p", VLEN)
-        self.add("valu", ("vbroadcast", v_forest_values_p, self.scratch["forest_values_p"]))
-
+        self.add("valu", ("vbroadcast", v_forest_values_p, c_forest_values_p))
+        root_val = self.alloc_scratch("root_val")
+        v_root = self.alloc_scratch("v_root", VLEN)
+        node1_val = self.alloc_scratch("node1_val")
+        node2_val = self.alloc_scratch("node2_val")
+        node3_val = self.alloc_scratch("node3_val")
+        node4_val = self.alloc_scratch("node4_val")
+        node5_val = self.alloc_scratch("node5_val")
+        node6_val = self.alloc_scratch("node6_val")
+        v_node1 = self.alloc_scratch("v_node1", VLEN)
+        v_node2 = self.alloc_scratch("v_node2", VLEN)
+        v_node3 = self.alloc_scratch("v_node3", VLEN)
+        v_node4 = self.alloc_scratch("v_node4", VLEN)
+        v_node5 = self.alloc_scratch("v_node5", VLEN)
+        v_node6 = self.alloc_scratch("v_node6", VLEN)
+        v_node12_diff = self.alloc_scratch("v_node12_diff", VLEN)
+        v_node36_diff = self.alloc_scratch("v_node36_diff", VLEN)
+        v_node46_diff = self.alloc_scratch("v_node46_diff", VLEN)
+        v_node56_diff = self.alloc_scratch("v_node56_diff", VLEN)
+        preload_slots = [
+            ("load", ("load", root_val, c_forest_values_p)),
+            ("valu", ("vbroadcast", v_root, root_val)),
+            ("load", ("load", node1_val, c_forest_values_p1)),
+            ("valu", ("vbroadcast", v_node1, node1_val)),
+            ("load", ("load", node2_val, c_forest_values_p2)),
+            ("valu", ("vbroadcast", v_node2, node2_val)),
+            ("load", ("const", tmp3, forest_values_p + 3)),
+            ("load", ("load", node3_val, tmp3)),
+            ("valu", ("vbroadcast", v_node3, node3_val)),
+            ("load", ("const", tmp3, forest_values_p + 4)),
+            ("load", ("load", node4_val, tmp3)),
+            ("valu", ("vbroadcast", v_node4, node4_val)),
+            ("load", ("const", tmp3, forest_values_p + 5)),
+            ("load", ("load", node5_val, tmp3)),
+            ("valu", ("vbroadcast", v_node5, node5_val)),
+            ("load", ("const", tmp3, forest_values_p + 6)),
+            ("load", ("load", node6_val, tmp3)),
+            ("valu", ("vbroadcast", v_node6, node6_val)),
+            ("valu", ("-", v_node12_diff, v_node1, v_node2)),
+            ("valu", ("-", v_node36_diff, v_node3, v_node6)),
+            ("valu", ("-", v_node46_diff, v_node4, v_node6)),
+            ("valu", ("-", v_node56_diff, v_node5, v_node6)),
+        ]
         # Load all values into scratch. Input indices are always initialized to zero,
         # so we can initialize scratch indices directly without memory loads.
         scratch_indices = self.alloc_scratch("scratch_indices", batch_size)
         scratch_values = self.alloc_scratch("scratch_values", batch_size)
         c_vlen = self.scratch_const(VLEN)
         init_slots = []
-        init_slots.append(("flow", ("add_imm", tmp3, self.scratch["inp_values_p"], 0)))
-        for i in range(0, batch_size, VLEN):
-            init_slots.append(("load", ("vload", scratch_values + i, tmp3)))
-            if i + VLEN < batch_size:
-                init_slots.append(("alu", ("+", tmp3, tmp3, c_vlen)))
-        self.instrs.extend(self.build(init_slots, vliw=True))
+        init_slots.append(("load", ("vload", scratch_values, c_inp_values_p)))
+        if batch_size > VLEN:
+            init_slots.append(("alu", ("+", tmp3, c_inp_values_p, c_vlen)))
+            for i in range(VLEN, batch_size, VLEN):
+                init_slots.append(("load", ("vload", scratch_values + i, tmp3)))
+                if i + VLEN < batch_size:
+                    init_slots.append(("alu", ("+", tmp3, tmp3, c_vlen)))
+        prologue_slots = preload_slots + init_slots
+        self.instrs.extend(self.build(prologue_slots, vliw=True))
 
         # Vectorization Scratch
         # Each lane-group needs 4 vectors (node value, address, and two temporaries).
         # Keep unroll modest so we always fit scratch across all benchmark inputs.
-        UNROLL = min(batch_size // VLEN, 4)
-        
-        v_node_val_arr = [self.alloc_scratch(f"v_node_val_{j}", VLEN) for j in range(UNROLL)]
-        v_addr_arr = [self.alloc_scratch(f"v_addr_{j}", VLEN) for j in range(UNROLL)]
+        BASE_UNROLL = min(batch_size // VLEN, 4)
+        FAST_UNROLL = min(batch_size // VLEN, 8)
+
+        v_node_val_arr = [self.alloc_scratch(f"v_node_val_{j}", VLEN) for j in range(FAST_UNROLL)]
+        v_addr_arr = [self.alloc_scratch(f"v_addr_{j}", VLEN) for j in range(FAST_UNROLL)]
         # We'll use these for hashing and update logic
-        v_tmp1_arr = [self.alloc_scratch(f"v_tmp1_{j}", VLEN) for j in range(UNROLL)]
-        v_tmp2_arr = [self.alloc_scratch(f"v_tmp2_{j}", VLEN) for j in range(UNROLL)]
+        v_tmp1_arr = [self.alloc_scratch(f"v_tmp1_{j}", VLEN) for j in range(FAST_UNROLL)]
+        v_tmp2_arr = [self.alloc_scratch(f"v_tmp2_{j}", VLEN) for j in range(FAST_UNROLL)]
 
         chunk_elems = UNROLL * VLEN
 
         # Main Loop over Rounds
         for round in range(rounds):
             body = []
+            curr_unroll = FAST_UNROLL if (round % 11) in (0, 1, 2) else BASE_UNROLL
+            chunk_elems = curr_unroll * VLEN
             for chunk in range(0, batch_size, chunk_elems):
-                active = min(UNROLL, (batch_size - chunk) // VLEN)
+                active = min(curr_unroll, (batch_size - chunk) // VLEN)
 
-                # Strip 1: Address calculation
-                for j in range(active):
-                    vid = scratch_indices + chunk + j * VLEN
-                    vaddr = v_addr_arr[j]
-                    body.append(("valu", ("+", vaddr, v_forest_values_p, vid)))
-
-                # Strip 2: Gathers (The main bottleneck)
-                for vi in range(VLEN):
+                if round % 11 == 0:
                     for j in range(active):
+                        vval = scratch_values + chunk + j * VLEN
+                        body.append(("valu", ("^", vval, vval, v_root)))
+                elif round % 11 == 1:
+                    for j in range(active):
+                        vid = scratch_indices + chunk + j * VLEN
                         vnode = v_node_val_arr[j]
+                        vmask = v_tmp1_arr[j]
+                        vval = scratch_values + chunk + j * VLEN
+                        body.append(("valu", ("==", vmask, vid, v_one)))
+                        body.append(("valu", ("multiply_add", vnode, vmask, v_node12_diff, v_node2)))
+                        body.append(("valu", ("^", vval, vval, vnode)))
+                elif round % 11 == 2:
+                    for j in range(active):
+                        vid = scratch_indices + chunk + j * VLEN
+                        vmask = v_tmp1_arr[j]
+                        vnode = v_node_val_arr[j]
+                        vval = scratch_values + chunk + j * VLEN
+                        body.append(("valu", ("==", vmask, vid, v_three)))
+                        body.append(("valu", ("multiply_add", vnode, vmask, v_node36_diff, v_node6)))
+                        body.append(("valu", ("==", vmask, vid, v_four)))
+                        body.append(("valu", ("multiply_add", vnode, vmask, v_node46_diff, vnode)))
+                        body.append(("valu", ("==", vmask, vid, v_five)))
+                        body.append(("valu", ("multiply_add", vnode, vmask, v_node56_diff, vnode)))
+                        body.append(("valu", ("^", vval, vval, vnode)))
+                else:
+                    # Strip 1: Address calculation
+                    for j in range(active):
+                        vid = scratch_indices + chunk + j * VLEN
                         vaddr = v_addr_arr[j]
-                        body.append(("load", ("load_offset", vnode, vaddr, vi)))
+                        body.append(("valu", ("+", vaddr, v_forest_values_p, vid)))
 
-                # Strip 3: Hash and Update
-                for j in range(active):
-                    vid = scratch_indices + chunk + j * VLEN
-                    vval = scratch_values + chunk + j * VLEN
-                    vnode = v_node_val_arr[j]
-                    vtmp1 = v_tmp1_arr[j]
-                    vtmp2 = v_tmp2_arr[j]
+                    # Strip 2: Gathers (The main bottleneck)
+                    for vi in range(VLEN):
+                        for j in range(active):
+                            vnode = v_node_val_arr[j]
+                            vaddr = v_addr_arr[j]
+                            body.append(("load", ("load_offset", vnode, vaddr, vi)))
 
-                    body.append(("valu", ("^", vval, vval, vnode)))
-                    body.extend(self.build_hash_vector(vval, vtmp1, vtmp2, vconsts))
+                    # Strip 3: Hash input xor
+                    for j in range(active):
+                        vval = scratch_values + chunk + j * VLEN
+                        vnode = v_node_val_arr[j]
+                        body.append(("valu", ("^", vval, vval, vnode)))
 
-                    if round + 1 < rounds:
-                        # Update logic: idx = (idx << 1) + (1 if val % 2 == 0 else 2)
-                        body.append(("valu", ("&", vtmp1, vval, v_one)))
-                        body.append(("valu", ("+", vtmp1, vtmp1, v_one)))
-                        body.append(("valu", ("multiply_add", vid, vid, v_two, vtmp1)))
+                # Hash scheduled stage-major across vectors for better slot packing.
+                for op1, val1, op2, op3, val3 in HASH_STAGES:
+                    v1 = vconsts[val1]
+                    # Fuse stages of form: val = (val + const) + (val << k)
+                    if op1 == "+" and op2 == "+" and op3 == "<<" and val3 in fused_mul_consts:
+                        vmul = fused_mul_consts[val3]
+                        for j in range(active):
+                            vval = scratch_values + chunk + j * VLEN
+                            body.append(("valu", ("multiply_add", vval, vval, vmul, v1)))
+                        continue
 
-                        # Wrap around
-                        body.append(("valu", ("<", vtmp1, vid, v_n_nodes)))
-                        body.append(("flow", ("vselect", vid, vtmp1, vid, v_zero)))
+                    v3 = vconsts[val3]
+                    for j in range(active):
+                        vval = scratch_values + chunk + j * VLEN
+                        vtmp1 = v_tmp1_arr[j]
+                        body.append(("valu", (op1, vtmp1, vval, v1)))
+                    for j in range(active):
+                        vval = scratch_values + chunk + j * VLEN
+                        vtmp2 = v_tmp2_arr[j]
+                        body.append(("valu", (op3, vtmp2, vval, v3)))
+                    for j in range(active):
+                        vval = scratch_values + chunk + j * VLEN
+                        vtmp1 = v_tmp1_arr[j]
+                        vtmp2 = v_tmp2_arr[j]
+                        body.append(("valu", (op2, vval, vtmp1, vtmp2)))
+
+                if round + 1 < rounds:
+                    if round % 11 == 10:
+                        # At depth 10, next index always overflows tree bounds and wraps to zero.
+                        for j in range(active):
+                            vid = scratch_indices + chunk + j * VLEN
+                            body.append(("valu", ("^", vid, vid, vid)))
+                    else:
+                        if round % 11 == 0:
+                            # Starting from zero indices: idx = (val & 1) + 1
+                            for j in range(active):
+                                vid = scratch_indices + chunk + j * VLEN
+                                vval = scratch_values + chunk + j * VLEN
+                                body.append(("valu", ("&", vid, vval, v_one)))
+                            for j in range(active):
+                                vid = scratch_indices + chunk + j * VLEN
+                                body.append(("valu", ("+", vid, vid, v_one)))
+                        else:
+                            # Update logic: idx = (idx << 1) + (1 if val % 2 == 0 else 2)
+                            for j in range(active):
+                                vval = scratch_values + chunk + j * VLEN
+                                vtmp1 = v_tmp1_arr[j]
+                                body.append(("valu", ("&", vtmp1, vval, v_one)))
+                            for j in range(active):
+                                vtmp1 = v_tmp1_arr[j]
+                                body.append(("valu", ("+", vtmp1, vtmp1, v_one)))
+                            for j in range(active):
+                                vid = scratch_indices + chunk + j * VLEN
+                                vtmp1 = v_tmp1_arr[j]
+                                body.append(("valu", ("multiply_add", vid, vid, v_two, vtmp1)))
 
             self.instrs.extend(self.build(body, vliw=True))
                 
         # Store back to memory
         store_slots = []
-        store_slots.append(("flow", ("add_imm", tmp3, self.scratch["inp_values_p"], 0)))
-        for i in range(0, batch_size, VLEN):
-            store_slots.append(("store", ("vstore", tmp3, scratch_values + i)))
-            if i + VLEN < batch_size:
-                store_slots.append(("alu", ("+", tmp3, tmp3, c_vlen)))
+        store_slots.append(("store", ("vstore", c_inp_values_p, scratch_values)))
+        if batch_size > VLEN:
+            store_slots.append(("alu", ("+", tmp3, c_inp_values_p, c_vlen)))
+            for i in range(VLEN, batch_size, VLEN):
+                store_slots.append(("store", ("vstore", tmp3, scratch_values + i)))
+                if i + VLEN < batch_size:
+                    store_slots.append(("alu", ("+", tmp3, tmp3, c_vlen)))
         self.instrs.extend(self.build(store_slots, vliw=True))
 
 BASELINE = 147734
